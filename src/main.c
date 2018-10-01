@@ -3,6 +3,15 @@
 #include <string.h>
 #include <stdbool.h>
 
+#define LOOP (transition->move == 'S' && \
+                conf->state == transition->next_state && \
+                conf->tape->characters[conf->tape->index] == transition->out)
+
+#define EDGE (conf->state == transition->next_state && \
+                conf->tape->characters[conf->tape->index] == '_' && \
+                ((conf->tape->index == conf->tape->items_size - 1 && transition->move == 'R') || \
+                                                        (conf->tape->index == 0 && transition->move == 'R')))
+
 #define ENABLE_FILE_INPUT
 #define ENABLE_LOGGING
 
@@ -72,50 +81,6 @@ void push(Node **head, void *data) {
     *head = new_node;
 }
 
-void append(Node **head, void *data) {
-    Node *new_node = (Node *) malloc(sizeof(Node));
-    Node *last = *head;
-    new_node->data = data;
-    new_node->next = NULL;
-
-    if (*head == NULL) {
-        *head = new_node;
-        return;
-    }
-
-    while (last->next != NULL)
-        last = last->next;
-
-    last->next = new_node;
-}
-
-/*
- * Transitions deletions
- */
-
-void delete_transition(Transition *transition) {
-    free(transition);
-}
-
-void delete_transition_node(Node *node) {
-    Transition *transition = (Transition *) node->data;
-    delete_transition(transition);
-    free(node);
-}
-
-void destroy_transitions(Node *transitions) {
-    Node *index = transitions;
-    Node *next = NULL;
-
-    if (transitions == NULL) return;
-
-    while (index != NULL) {
-        next = index->next;
-        delete_transition_node(index);
-        index = next;
-    }
-}
-
 /*
  * Configurations deletions
  */
@@ -175,48 +140,6 @@ Node *delete_old_configuration_node(Node *configurations, Node* node) {
 
     else return NULL;
 }
-
-/*
-Node *delete_old_configuration_node(Node *configurations, int old_state, Tape **pTape) {
-    Node *index = configurations;
-    Node *prev = NULL;
-
-    if (((Configuration *) index->data)->state == old_state && &(((Configuration *) index->data)->tape) == pTape) {
-        configurations = configurations->next;
-        delete_configuration_node(index);
-        return configurations;
-    }
-    prev = index;
-    index = index->next;
-
-    while (index != NULL) {
-        Configuration *configuration = index->data;
-        if (configuration->state == old_state && &configuration->tape == pTape) {
-            prev->next = index->next;
-            delete_configuration_node(index);
-            return configurations;
-        }
-
-        prev = index;
-        index = index->next;
-    }
-    return configurations;
-}
-
-void destroy_tm(TM *tm) {
-    TM *turing_machine = tm;
-
-    for (int i = 0; i < turing_machine->items_size; i++) {
-        State *state = turing_machine->states_array[i];
-        for (int j = 0; j < 75; j++) {
-            Node *transitions = state->transitions_array[j]->data;
-            destroy_transitions(transitions);
-            free(state->transitions_array);
-        }
-        free(state);
-    }
-    free(turing_machine);
-}*/
 
 /*
  * Creations of structs (building helpers)
@@ -284,7 +207,7 @@ void print_tm(TM *tm) {
         for (int j = 0; j < 75; j++) {
             Node *transitions = tm->states_array[i]->transitions_array[j];
             if (transitions != NULL) {
-                LOG("Found transition for %c\n", (char) j - 48);
+                LOG("Found transition for %c\n", (char) j + 48);
                 for (Node *k = transitions; k != NULL; k = k->next) {
                     Transition *transition = k->data;
                     LOG("[out: %c | move %c | next_state: %d]\n", transition->out, transition->move,
@@ -342,15 +265,30 @@ void build_tm(TM *tm, char *buf) {
     }
 }
 
+
 void set_acceptor(char *buf, TM *tm) {
     int acceptor;
+    int mid, lo = 0, hi = tm->items_size - 1;
+
     sscanf(buf, "%d", &acceptor);
 
-    for (int i = 0; i < tm->items_size; i++) {
-        if (tm->states_array[i]->state_number == acceptor) {
-            tm->states_array[i]->isAcceptor = true;
+    while(lo <= hi) {
+
+        mid = (lo + hi) / 2;
+        State* state = tm->states_array[mid];
+
+        if(state->state_number == acceptor) {
+            state->isAcceptor = true;
         }
+
+        if(state->state_number < acceptor) {
+            lo = mid + 1;
+        }
+
+        else
+            hi = mid - 1;
     }
+
 }
 
 /*
@@ -458,21 +396,15 @@ char run_configuration(Configuration *configuration, TM *tm) {
                 continue;
             }
 
+            /*
+             * Non Deterministic case:
+             */
+
             while(j->next != NULL) {
 
                 Transition *transition = (Transition *) j->data;
 
-                if (
-                        (transition->move == 'S' &&
-                         conf->state == transition->next_state &&
-                         conf->tape->characters[conf->tape->index] == transition->out)
-
-                         ||
-
-                         (conf->state == transition->next_state &&
-                          conf->tape->characters[conf->tape->index] == '_' &&
-                         ((conf->tape->index == conf->tape->items_size - 1 && transition->move == 'R') || (conf->tape->index == 0 && transition->move == 'R'))
-                        )) {
+                if (EDGE || LOOP) {
                     unknown = true;
                     j = j->next;
                     continue;
@@ -491,20 +423,13 @@ char run_configuration(Configuration *configuration, TM *tm) {
                 j = j->next;
             }
 
+            /*
+             * Deterministic case:
+             */
 
             Transition *transition = (Transition *) j->data;
 
-            if (
-                    (transition->move == 'S' &&
-                     conf->state == transition->next_state &&
-                     conf->tape->characters[conf->tape->index] == transition->out)
-
-                    ||
-
-                    (conf->state == transition->next_state &&
-                     conf->tape->characters[conf->tape->index] == '_' &&
-                     ((conf->tape->index == conf->tape->items_size - 1 && transition->move == 'R') || (conf->tape->index == 0 && transition->move == 'R'))
-                    )) {
+            if (EDGE || LOOP) {
                 unknown = true;
                 Node * toDelete = i;
                 i = i->next;
@@ -537,7 +462,7 @@ char run_configuration(Configuration *configuration, TM *tm) {
 
 int main() {
 
-    FREOPEN("../resources/unionstuck.txt", "r", stdin);
+    FREOPEN("../resources/fancyloops.txt", "r", stdin);
     char trailing[6];
     scanf("%s\n", trailing);
     LOG("Trailing: %s, TM Creation...\n", trailing);
@@ -592,6 +517,3 @@ int main() {
         printf("%c\n", run_configuration(configuration, tm));
     }
 }
-
-/* TODO:
-*/
