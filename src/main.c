@@ -4,7 +4,7 @@
 #include <stdbool.h>
 
 #define ENABLE_FILE_INPUT
-//#define ENABLE_LOGGING
+#define ENABLE_LOGGING
 
 #ifdef ENABLE_LOGGING
 #define LOG(format, ...) printf(format, ## __VA_ARGS__)
@@ -22,6 +22,7 @@
 typedef struct node {
     void *data;
     struct node *next;
+    struct node * prev;
 } Node;
 
 typedef struct {
@@ -62,6 +63,12 @@ void push(Node **head, void *data) {
     Node *new_node = (Node *) malloc(sizeof(Node));
     new_node->data = data;
     new_node->next = *head;
+    new_node->prev = NULL;
+
+    if (*head != NULL) {
+        (*head)->prev = new_node;
+    }
+
     *head = new_node;
 }
 
@@ -138,6 +145,38 @@ void destroy_configurations(Node *configurations) {
     }
 }
 
+Node *delete_old_configuration_node(Node *configurations, Node* node) {
+
+
+    if (node->prev == NULL && node->next == NULL) {
+        delete_configuration_node(node);
+        return NULL;
+    }
+
+    else if (node->prev != NULL && node->next != NULL) {
+        node->prev->next = node->next;
+        node->next->prev = node->prev;
+        delete_configuration_node(node);
+        return configurations;
+    }
+
+    else if (node->prev == NULL && node->next != NULL) {
+        configurations = node->next;
+        configurations->prev = NULL;
+        delete_configuration_node(node);
+        return configurations;
+    }
+
+    else if (node->prev != NULL && node->next == NULL) {
+        node->prev->next = NULL;
+        delete_configuration_node(node);
+        return configurations;
+    }
+
+    else return NULL;
+}
+
+/*
 Node *delete_old_configuration_node(Node *configurations, int old_state, Tape **pTape) {
     Node *index = configurations;
     Node *prev = NULL;
@@ -177,7 +216,7 @@ void destroy_tm(TM *tm) {
         free(state);
     }
     free(turing_machine);
-}
+}*/
 
 /*
  * Creations of structs (building helpers)
@@ -320,16 +359,24 @@ void set_acceptor(char *buf, TM *tm) {
 
 void extend(char move, Tape *tape) {
 
-    tape->characters = realloc(tape->characters, (sizeof(char)) * (tape->items_size + 1));
+    int old_size = tape->items_size;
 
-    tape->items_size = tape->items_size + 1;
+    tape->characters = realloc(tape->characters, (sizeof(char)) * (tape->items_size + 1000));
+
+    tape->items_size = tape->items_size + 1000;
 
     if (move == 'R') {
-        tape->characters[tape->items_size - 1] = '_';
-    } else if (move == 'L') {
-        memmove(&tape->characters[1], tape->characters, (size_t) tape->items_size - 1);
-        tape->characters[0] = '_';
-        tape->index++;
+        for (int i = old_size; i < tape->items_size; i++) {
+        tape->characters[i] = '_';
+        }
+    }
+
+    else if (move == 'L') {
+        memmove(&tape->characters[1000], tape->characters, (size_t) old_size);
+        for (int i = 0; i < 1000; i++) {
+            tape->characters[i] = '_';
+        }
+        tape->index = tape->index + 1000;
     }
 }
 
@@ -403,26 +450,37 @@ char run_configuration(Configuration *configuration, TM *tm) {
             Configuration *conf = i->data;
 
             Node *j = get_transitions(conf->state, conf->tape, tm);
-            while(j != NULL) {
+
+            if(j == NULL) {
+                Node * toDelete = i;
+                i = i->next;
+                configurations = delete_old_configuration_node(configurations, toDelete);
+                continue;
+            }
+
+            while(j->next != NULL) {
 
                 Transition *transition = (Transition *) j->data;
 
                 if (
                         (transition->move == 'S' &&
                          conf->state == transition->next_state &&
-                         conf->tape->characters[conf->tape->index] == transition->out) ||
+                         conf->tape->characters[conf->tape->index] == transition->out)
 
-                        ((transition->move != 'S' &&
-                          conf->state == transition->next_state &&
-                          conf->tape->characters[conf->tape->index] == '_') &&
-                         (conf->tape->index == conf->tape->items_size || conf->tape->index == 0))
-                        ) {
+                         ||
+
+                         (conf->state == transition->next_state &&
+                          conf->tape->characters[conf->tape->index] == '_' &&
+                         ((conf->tape->index == conf->tape->items_size - 1 && transition->move == 'R') || (conf->tape->index == 0 && transition->move == 'R'))
+                        )) {
                     unknown = true;
+                    j = j->next;
                     continue;
                 }
 
                 Configuration *new_conf = new_configuration(conf->state, duplicate(conf->tape));
                 int next_state = delta(transition, new_conf->tape);
+
                 if (tm->states_array[next_state]->isAcceptor) {
                     destroy_configurations(configurations);
                     return '1';
@@ -432,8 +490,38 @@ char run_configuration(Configuration *configuration, TM *tm) {
                 push(&configurations, new_conf);
                 j = j->next;
             }
+
+
+            Transition *transition = (Transition *) j->data;
+
+            if (
+                    (transition->move == 'S' &&
+                     conf->state == transition->next_state &&
+                     conf->tape->characters[conf->tape->index] == transition->out)
+
+                    ||
+
+                    (conf->state == transition->next_state &&
+                     conf->tape->characters[conf->tape->index] == '_' &&
+                     ((conf->tape->index == conf->tape->items_size - 1 && transition->move == 'R') || (conf->tape->index == 0 && transition->move == 'R'))
+                    )) {
+                unknown = true;
+                Node * toDelete = i;
+                i = i->next;
+                configurations = delete_old_configuration_node(configurations, toDelete);
+                continue;
+            }
+
+            int next_state = delta(transition, conf->tape);
+
+            if (tm->states_array[next_state]->isAcceptor) {
+                destroy_configurations(configurations);
+                return '1';
+            }
+
+            conf->state = next_state;
+
             i = i->next;
-            configurations = delete_old_configuration_node(configurations, conf->state, &conf->tape);
 
         }
         current_move++;
@@ -449,7 +537,7 @@ char run_configuration(Configuration *configuration, TM *tm) {
 
 int main() {
 
-    FREOPEN("../resources/pubblico.txt", "r", stdin);
+    FREOPEN("../resources/unionstuck.txt", "r", stdin);
     char trailing[6];
     scanf("%s\n", trailing);
     LOG("Trailing: %s, TM Creation...\n", trailing);
@@ -506,7 +594,4 @@ int main() {
 }
 
 /* TODO:
- * [80% (controllare free)]    controllare le free e liberare il massimo spazio della memoria -> configurazioni e se proprio tm iniziale
- * [un caso eliminato]         ottimizzare evitando i loop e le situazioni banali
- * [0%]                        cambiare lista (quindi anche push e delete) affinchè siano doppiamente concatenate (O(1))
 */
